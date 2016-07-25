@@ -1,5 +1,12 @@
+/*
+ * A program to resize an image in an AWS S3 bucket.
+ * Written in Node.js, this program accepts an array of image sizes in the payload.
+ * The image is then resized to the specified width(s) and stored in a new directory.
+ *
+ * Author: David MacCormick
+ * Date: June 2016
+ */
 
-// dependencies
 var async = require('async');
 var path = require('path');
 var AWS = require('aws-sdk');
@@ -7,139 +14,107 @@ var gm = require('gm').subClass({
     imageMagick: true
 });
 var util = require('util');
+
 // get reference to S3 client
 var s3 = new AWS.S3();
+
 exports.handler = function(event, context) {
 
     // payload data
     var mediaId = event.media_id;
     var filename = event.file_name;
     var bucket = event.bucket;
-    var _pxSmall = event.size_small;
-    var _pxThumbnail = event.size_thumbnail;
+    var sizesArray = event.sizesArray;
 
-    var _small = {
-        width: _pxSmall,
-        destinationPath: "small"
-    };
-    var _thumbnail = {
-        width: _pxThumbnail,
-        destinationPath: "thumbnail"
-    };
-    var _sizesArray = [_thumbnail, _small];
-    var len = _sizesArray.length;
-    // Infer the image type.
+    if(!sizesArray) {
+      /*
+       * If sizesArray is not specified in the payload, then use
+       * this as the default:
+       */
+      sizesArray = [{
+          width: 50, // sets the width of the resized image to 50px
+          dirName: 'thumbnail' // this is the folder name where the resized image will be stored
+      }];
+    }
+
+    var len = sizesArray.length;
+
+    // Get the image type
     var typeMatch = filename.match(/\.([^.]*)$/);
-    // var fileName = path.basename(srcKey);
     if (!typeMatch) {
         console.error('unable to infer image type for file ' + filename);
         return;
     }
-    var imageType = typeMatch[1].toLowerCase();
-    if (imageType != "jpg" && imageType != "gif" && imageType != "png" &&
-        imageType != "eps") {
-        console.log('skipping non-image ' + srcKey);
+
+    // make sure the image is a jpg or png
+    var type = typeMatch[1].toLowerCase();
+    if (type != "jpg" && type != "png") {
+        console.log('Image is not the right format: ' + srcKey);
         return;
     }
-    // Transform, and upload to same S3 bucket but to a different S3 bucket.
-    async.forEachOf(_sizesArray, function(value, key, callback) {
-        async.waterfall([
 
+    // Upload resized image to same location in the S3 bucket but within a new directory
+    async.forEachOf(sizesArray, function(value, key, callback) {
+        async.waterfall([
             function download(next) {
-                console.time("downloadImage");
-                console.log("download");
+                console.log("downloading image");
+
+                // download the image from the S3 bucket
                 s3.getObject({
                     Bucket: bucket,
                     Key: mediaId + '/' + filename
                 }, next);
-                console.timeEnd("downloadImage");
             },
             function process(response, next) {
-                console.log("process image");
-                console.time("processImage");
-                // Transform the image buffer in memory.
-                //gm(response.Body).size(function(err, size) {
+                console.log("processing image");
+
+                // Transform the image
                 gm(response.Body).size(function(err, size) {
-                    //console.log("buf content type " + buf.ContentType);
-                    // Infer the scaling factor to avoid stretching the image unnaturally.
-                    console.log("run " + key +
-                        " size array: " +
-                        _sizesArray[key].width);
-                    console.log("run " + key +
-                        " size : " + size);
                     console.log(err);
+
+                    // Calculate the scaling factor so that the resized image has the same width/height ratio
                     var scalingFactor = Math.min(
-                        _sizesArray[key].width /
-                        size.width, _sizesArray[
-                            key].width / size.height
+                        sizesArray[key].width / size.width, sizesArray[key].width / size.height
                     );
-                    console.log("run " + key +
-                        " scalingFactor : " +
-                        scalingFactor);
-                    var width = scalingFactor *
-                        size.width;
-                    var height = scalingFactor *
-                        size.height;
-                    console.log("run " + key +
-                        " width : " + width);
-                    console.log("run " + key +
-                        " height : " + height);
+                    var width = scalingFactor * size.width;
+                    var height = scalingFactor * size.height;
                     var index = key;
-                    //this.resize({width: width, height: height, format: 'jpg',})
                     this.resize(width, height).toBuffer(
-                        imageType.toUpperCase(), function(err,
-                            buffer) {
-                            if (err) {
-                                //next(err);
-                                next(err);
-                            } else {
-                                console.timeEnd(
-                                    "processImage"
-                                );
-                                next(null,
-                                    buffer,
-                                    key);
-                                //next(null, 'done');
-                            }
-                        });
+                      type.toUpperCase(), function(err, buffer) {
+                        if (err) {
+                            next(err);
+                        } else {
+                            next(null, buffer, key);
+                        }
+                    });
                 });
             },
             function upload(data, index, next) {
-                console.time("uploadImage");
-                console.log("upload : " + index);
-                // console.log(_sizesArray[
-                //         index].destinationPath +
-                //     "/" + fileName.slice(0, -4) +
-                //     ".jpg");
-                // Stream the transformed image to a different folder.
-                console.log('upload to key: ' + mediaId + '/' + _sizesArray[index].destinationPath + "/" + filename);
+                console.log("uploading resized image " + index);
+
+                // Place the resized image in the same bucket location, but in a different folder
+                console.log('uploading to this location: ' + mediaId + '/' + sizesArray[index].dirName + "/" + filename);
                 s3.putObject({
                     Bucket: bucket,
-                    Key: mediaId + '/' + _sizesArray[
-                            index].destinationPath +
-                        "/" + filename,
+                    Key: mediaId + '/' + sizesArray[index].dirName + "/" + filename,
                     Body: data,
-                    ContentType: imageType.toUpperCase()
+                    ContentType: type.toUpperCase()
                 }, next);
-                console.timeEnd("uploadImage");
             }
         ], function(err, result) {
             if (err) {
                 console.error(err);
             }
-            // result now equals 'done'
-            console.log("End of step " + key);
             callback();
         });
     }, function(err) {
         if (err) {
-            console.error('---->Unable to resize ' + bucket +
-                '/' + filename + ' and upload to ' + mediaId + "/.../" + filename +
-                ' due to an error: ' + err);
+            console.log('Error uploading image');
+            console.error(err);
         } else {
-            console.log('---->Successfully resized ' + bucket +
-                ' and uploaded to' + mediaId + "/.../" + filename);
+            console.log('Successfully resized image');
         }
         context.done();
     });
 };
+
