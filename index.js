@@ -2,9 +2,6 @@
  * A program to resize an image in an AWS S3 bucket.
  * Written in Node.js, this program accepts an array of image sizes in the payload.
  * The image is then resized to the specified width(s) and stored in a new directory.
- *
- * Author: David MacCormick
- * Date: June 2016
  */
 
 var async = require('async');
